@@ -1,0 +1,9 @@
+# Replace the placeholders with each person's GitHub username.
+/sim/          @PERSON1_USERNAME
+/policy/       @PERSON2_USERNAME
+/baselines/    @PERSON3_USERNAME
+/eval/         @PERSON3_USERNAME
+/configs/      @PERSON3_USERNAME
+/docs/         @PERSON3_USERNAME
+/service/      @PERSON4_USERNAME
+/reference/    @PERSON4_USERNAME

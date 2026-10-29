@@ -1,0 +1,4 @@
+id,title,source,year,url,used_for,verified
+1,RBI Authentication Mechanisms for Digital Payment Transactions Directions,RBI,2025,,two-factor and risk-based extra checks,no
+2,Financial Fraud Risk Indicator (FRI),Department of Telecommunications,2025,,payee number risk label (medium/high/very high),no
+3,Wiefling et al. risk-based authentication study,arXiv 2003.07622,2020,https://arxiv.org/abs/2003.07622,risk-based authentication usability and security,no
