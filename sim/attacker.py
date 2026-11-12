@@ -165,7 +165,7 @@ class _Budget:
 
 
 def _evolution_strategy(obj, x0, free, rng, sigma=0.2, lam=8):
-    """(1+lambda) evolution strategy with a 1/5-style step-size rule. Fallback when `cma` is absent."""
+    """Evolution strategy with a 1/5-style step-size rule."""
     x, fx = x0.copy(), obj.best
     while obj.left >= lam:
         cands = []
@@ -213,9 +213,11 @@ def optimise(f, free, tries, random_frac, optimizer, seed) -> dict:
             try:
                 _cma(obj, obj.best_x, free, seed)
             except ImportError:
-                warnings.warn("cma is not installed (pip install -e '.[opt]'); using the built-in "
-                              "evolution strategy, so attacker numbers will differ from CMA-ES runs",
-                              stacklevel=2)
+                warnings.warn(
+                    "cma is not installed (pip install -e '.[opt]'); using the built-in "
+                    "evolution strategy, so attacker numbers will differ from CMA-ES runs",
+                    stacklevel=2,
+                )
                 _evolution_strategy(obj, obj.best_x, free, rng)
         else:
             _evolution_strategy(obj, obj.best_x, free, rng)
@@ -289,7 +291,8 @@ def worst_case_curve(cfg, weights=None, shifts=None, tries=None, test_seeds=None
       evasive_prevented          hand-written evasive variant
       learned_prevented          learned attacker, measured on the unseen test seeds
       hand_lost, evasive_lost, learned_lost    rupees that got through, per seed, all types
-      beats_evasive_pp           evasive_prevented - learned_prevented (positive: learned is stronger)
+      beats_evasive_pp           evasive_prevented - learned_prevented
+                                 (positive: learned is stronger)
       per_type                   the same numbers for each attack type
     """
     a = cfg.attacker
@@ -325,8 +328,10 @@ def worst_case_curve(cfg, weights=None, shifts=None, tries=None, test_seeds=None
 
 def held_out_curve(cfg, weights=None, shifts=None, held_out=None, tries=None, test_seeds=None,
                    train_seeds=None, optimizer=None, log=None) -> list[dict]:
-    """Train one shared strategy on four attack types and test it on the fifth, unseen type.
-    One row per shift: held_out, hand/evasive/transfer prevented % on the held-out type (test seeds)."""
+    """Train on four attack types and test on the fifth unseen type.
+
+    One row per shift contains prevented percentages for the held-out type.
+    """
     a = cfg.attacker
     st = a.shifts
     shifts = list(shifts) if shifts is not None else list(range(st.start, st.stop + 1, st.step))

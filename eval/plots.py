@@ -95,7 +95,8 @@ def plot_ablation(abl, out, title="What each signal group adds"):
     ax.barh(d["group"], d["d_prevented_mean"], xerr=d["d_prevented_std"],
             color=COLORS["engine"], height=0.6, error_kw={"ecolor": MUTED, "elinewidth": 1})
     ax.axvline(0, color="#c3c2b7", linewidth=1)
-    ax.set_xlabel("Change in fraud value stopped (percentage points) when the group is switched off",
+    ax.set_xlabel(
+        "Change in fraud value stopped (percentage points) when the group is switched off",
                   color=MUTED, fontsize=9)
     ax.set_title(title, loc="left", fontsize=12, color=INK, pad=12)
     _style(ax)
@@ -142,7 +143,11 @@ def plot_sensitivity(cases, out):
             curve, base = cases[(kind, s)]
             _draw_tradeoff(ax, curve, base)
             _xscale(ax, max(xmax * 1.05, 50), sparse=True)
-            label = "friction and giving-up chance" if kind == "friction" else "chance an action stops an attack"
+            label = (
+                "friction and giving-up chance"
+                if kind == "friction"
+                else "chance an action stops an attack"
+            )
             ax.set_title(f"{label} x{s:g}", fontsize=9, color=INK, loc="left")
             if c == 0:
                 ax.set_ylabel("Fraud value stopped (%)", color=MUTED, fontsize=9)

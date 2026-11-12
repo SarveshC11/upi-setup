@@ -31,14 +31,14 @@ def immutable_signals(cfg, attack_type: str) -> list[str]:
         "replay": [],
         "stolen": ["new_payee"],
     }
-    attacks = getattr(getattr(cfg, "generator", cfg), "attacks")
+    attacks = getattr(cfg, "generator", cfg).attacks
     attack = attacks[attack_type]
     return list(getattr(attack, "immutable", defaults[attack_type]))
 
 
 def attack_spec(cfg, attack_type: str) -> dict:
     """The hand-written parameters of one attack type, as a plain dict."""
-    attacks = getattr(getattr(cfg, "generator", cfg), "attacks")
+    attacks = getattr(cfg, "generator", cfg).attacks
     A = attacks[attack_type]
     return {
         "new_device": float(A.new_device),
@@ -95,7 +95,10 @@ def generate_attack_type(attack_type, spec, user_medians, n, rng, ev, coverage,
     The `u` column is left at 0; the caller draws it last.
     """
     m = user_medians[rng.integers(0, len(user_medians), n)]
-    r = np.maximum(1.2, np.exp(np.log(spec["median_multiple"]) + spec["sigma"] * rng.standard_normal(n)))
+    r = np.maximum(
+        1.2,
+        np.exp(np.log(spec["median_multiple"]) + spec["sigma"] * rng.standard_normal(n)),
+    )
     net_idx = _pick(rng, [spec["network"][k] for k in NETWORKS], n)
     velocity = rng.random(n) < spec["velocity"]
     fri = _pick(rng, spec["fri"], n)

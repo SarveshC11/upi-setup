@@ -280,8 +280,11 @@ def write_yaml(path: Path, weights: dict, thresholds) -> None:
     doc = {"extends": "default.yaml",
            "policy": {"weights": {k: int(v) for k, v in weights.items()},
                       "thresholds": [int(t) for t in thresholds], "shift": 0}}
-    header = ("# Written by policy/calibrate.py. Load with load_config('configs/calibrated.yaml').\n"
-              "# Thresholds are in thresholds; shift stays 0 so the slider still works.\n")
+    header = (
+        "# Written by policy/calibrate.py. "
+        "Load with load_config('configs/calibrated.yaml').\n"
+        "# Thresholds are in thresholds; shift stays 0 so the slider still works.\n"
+    )
     path.write_text(header + yaml.safe_dump(doc, sort_keys=False))
 
 

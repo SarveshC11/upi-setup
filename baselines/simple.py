@@ -25,6 +25,6 @@ def make_amount_rule(limit: float = 10000):
 
 
 def fri_only(df: pd.DataFrame) -> pd.Series:
-    """Models what is deployed today: block 'very high' payee numbers, warn on 'medium' and 'high'."""
+    """Block very high payee numbers and warn on medium or high numbers."""
     fri = df["fri"].to_numpy()
     return pd.Series(np.select([fri == 3, fri >= 1], ["3", "W"], default="0"), index=df.index)

@@ -14,8 +14,13 @@ def test_hand_computed_example():
     # attacks: types all 'simswap'; stop chance table is read from config, so force certainty
     assume = {**A, "p_stop": {t: {a: (1.0 if t in ("1", "3") else 0.0) for a in A["p_stop"][t]}
                               for t in A["p_stop"]}}
-    attacks = pd.DataFrame({"attack_type": ["simswap"] * 4, "amount": [1000.0, 1000.0, 1000.0, 7000.0],
-                            "u": [0.5] * 4})
+    attacks = pd.DataFrame(
+        {
+            "attack_type": ["simswap"] * 4,
+            "amount": [1000.0, 1000.0, 1000.0, 7000.0],
+            "u": [0.5] * 4,
+        }
+    )
     atiers = pd.Series(["0", "1", "2", "3"])
     pols = iter([tiers, atiers])
     m = evaluate(lambda df: next(pols), legit, attacks, assume)

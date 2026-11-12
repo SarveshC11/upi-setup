@@ -87,7 +87,9 @@ def test_optimiser_respects_budget_and_finds_a_better_point(opt):
     assert res["tries_used"] <= 100
     assert res["train_lost"] > f(IDENTITY)
     assert len(res["history"]) == res["tries_used"]
-    assert all(b >= a for a, b in zip(res["history"], res["history"][1:], strict=False))  # best-so-far
+    assert all(
+        b >= a for a, b in zip(res["history"], res["history"][1:], strict=False)
+    )  # best-so-far
 
 
 def test_learned_attacker_is_never_worse_than_hand_written_on_training_seeds():

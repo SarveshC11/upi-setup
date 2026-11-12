@@ -18,8 +18,8 @@ import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
 from types import SimpleNamespace
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator

@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from common.config import ATTACK_TYPES, Config
-from sim.attacks import attack_spec, generate_attack_type, make_frame, _pick, NETWORKS
+from sim.attacks import _pick, attack_spec, generate_attack_type, make_frame
 from sim.rng import make_rng, make_side_rng
 
 COLUMNS = [

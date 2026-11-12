@@ -167,7 +167,9 @@ def main(argv=None):
         if "ml_curve" in r:
             curve = pd.concat([curve, r["ml_curve"]], ignore_index=True)
         curve.to_csv(out / f"sweep_{variant}.csv", index=False)
-        verdicts(r["curve"], r["summary"], include_ml=True).to_csv(out / f"verdicts_{variant}.csv", index=False)
+        verdicts(r["curve"], r["summary"], include_ml=True).to_csv(
+            out / f"verdicts_{variant}.csv", index=False
+        )
         base = r["summary"].set_index("policy")
         title = ("Fraud stopped against friction" if variant == "normal"
                  else "Fraud stopped against friction, attackers try to look normal")
@@ -190,8 +192,14 @@ def main(argv=None):
     sens_df.to_csv(out / "sensitivity.csv", index=False)
 
     wins = sens_df.groupby(["assumption", "scale"])["engine_wins"].all().reset_index()
-    info = {"seeds": seeds, "seconds": round(time.time() - t0, 1), "ml_baseline": ml is not None,
-            "engine_beats_every_baseline_in_all_sensitivity_cases": bool(sens_df["engine_wins"].all())}
+    info = {
+        "seeds": seeds,
+        "seconds": round(time.time() - t0, 1),
+        "ml_baseline": ml is not None,
+        "engine_beats_every_baseline_in_all_sensitivity_cases": bool(
+            sens_df["engine_wins"].all()
+        ),
+    }
     (out / "run_info.json").write_text(json.dumps(info, indent=2))
 
     pd.set_option("display.width", 200)

@@ -12,5 +12,5 @@ def make_rng(seed: int) -> np.random.Generator:
 
 
 def make_side_rng(seed: int, *salt: int) -> np.random.Generator:
-    """An independent stream for (seed, salt...). Used so extra draws never shift the main stream."""
+    """Independent stream for (seed, salt...) that does not shift the main stream."""
     return np.random.default_rng([seed, *salt])
