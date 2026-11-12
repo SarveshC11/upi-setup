@@ -124,3 +124,14 @@ baselines:
 experiment:
   shifts: {start: -30, stop: 60, step: 3}
   sensitivity_scales: [0.5, 1.0, 2.0]
+
+attacker:                      # learned attacker (Person 1): see sim/attacker.py
+  tries: 120                   # probes of the policy per attacker (a real attacker cannot probe forever)
+  random_frac: 0.4             # share of the budget spent on random search before CMA-ES
+  optimizer: cma               # cma, or es (built-in evolution strategy) if the cma package is missing
+  train_seeds: [1, 2, 3]
+  test_seeds: [101, 102, 103, 104, 105]
+  shifts: {start: -30, stop: 60, step: 6}
+  held_out: collect            # attack type never seen when training the shared strategy
+  rng_seed: 0
+  max_amount: 100000           # rupees; per-payment cap on any attack (assumed UPI limit, verify)
