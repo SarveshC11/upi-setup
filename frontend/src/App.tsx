@@ -208,6 +208,7 @@ export function App() {
                     payment={payment}
                     preset={preset}
                     policy={policy}
+                    result={result}
                     busy={scoring}
                     error={scoreError}
                     onChange={(p) => {
