@@ -1,114 +1,97 @@
-"""Synthetic payment generator (owner: Person 1; STARTER version written so the pipeline runs).
+"""Synthetic payment generator.
 
-Person 1: replace or extend this file, keeping the output format in docs/team_work_guide.md (A3).
+INTERIM STAND-IN (owner: Person 1). Written by Person 4 from guide section B1 so the service's
+/simulate endpoint and the parity tests can run. Person 1's version (with sim/rng.py,
+sim/attacks.py, the immutable lists and the learned attacker) replaces this file; the
+interface must stay:
+
+    generate(cfg, seed) -> (legit_df, attacks_df)   # both in the A3 format
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-from sim.attacks import ATTACK_TYPES, NETWORKS
-from sim.rng import make_rng
+from common.config import ATTACK_TYPES, Config
+from sim.attacks import attack_spec, generate_attack_type, make_frame, _pick, NETWORKS
+from sim.rng import make_rng, make_side_rng
 
 COLUMNS = [
     "kind", "attack_type", "median", "ratio", "amount", "new_device", "network", "new_payee",
     "velocity", "sim_change", "remote", "far_location", "fri", "u",
 ]
+_NETS = np.array(["home", "mobile", "public"], dtype=object)
 
 
-def _pick(rng, probs, n):
-    p = np.asarray(probs, dtype=float)
-    return rng.choice(len(p), size=n, p=p / p.sum())
+def user_medians(cfg: Config, rng: np.random.Generator) -> np.ndarray:
+    """Generate the per-user median amounts used by the simulator."""
+    lp = cfg.generator.legit
+    return np.clip(
+        np.round(rng.lognormal(np.log(lp.median_center), lp.median_sigma, cfg.sizes.n_users)),
+        lp.median_min,
+        lp.median_max,
+    ).astype(int)
 
 
-def _network(rng, probs, n):
-    idx = _pick(rng, [probs[k] for k in NETWORKS], n)
-    return np.array(NETWORKS)[idx]
+def _network(rng: np.random.Generator, mix, n: int) -> np.ndarray:
+    return _NETS[rng.choice(3, size=n, p=[mix.home, mix.mobile, mix.public])]
 
 
-def _frame(kind, attack_type, median, ratio, flags, network, fri):
-    n = len(median)
-    amount = np.maximum(1, np.rint(median * ratio)).astype(int)
-    return pd.DataFrame({
-        "kind": kind,
-        "attack_type": attack_type,
-        "median": median.astype(int),
-        "ratio": ratio.astype(float),
-        "amount": amount,
-        "new_device": flags["new_device"],
-        "network": network,
-        "new_payee": flags["new_payee"],
-        "velocity": flags["velocity"],
-        "sim_change": flags["sim_change"],
-        "remote": flags["remote"],
-        "far_location": flags["far_location"],
-        "fri": fri.astype(int),
-        "u": np.zeros(n),
-    })[COLUMNS]
+def _frame(**cols) -> pd.DataFrame:
+    df = pd.DataFrame(cols)[COLUMNS]
+    df["median"] = df["median"].astype(int)
+    df["amount"] = df["amount"].astype(int)
+    df["fri"] = df["fri"].astype(int)
+    return df
 
 
-def generate(cfg, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Returns (legit_df, attacks_df) in the shared payment format."""
-    rng = make_rng(seed)
+def generate(
+    cfg: Config, seed: int, n_users: int | None = None, payments_per_user: int | None = None,
+    attacks_per_type: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Returns (legit_df, attacks_df), both in the A3 format. Sizes default to cfg.sizes."""
     g = cfg.generator
-    n_users = cfg.sizes.users
-    per = cfg.sizes.legit_per_user
-    n_att = cfg.sizes.attacks_per_type
-    cov = g.coverage
+    lp = g.legit
+    n_users = cfg.sizes.n_users if n_users is None else n_users
+    per_user = cfg.sizes.payments_per_user if payments_per_user is None else payments_per_user
+    n_att = cfg.sizes.attacks_per_type if attacks_per_type is None else attacks_per_type
+    rng = make_rng(seed)
+    ev = make_side_rng(seed, 1)
 
-    # user habits
-    med = np.exp(np.log(g.median.loc) + g.median.sigma * rng.standard_normal(n_users))
-    med = np.rint(np.clip(med, g.median.min, g.median.max))
-
-    # genuine payments
-    L = g.legit
-    n = n_users * per
-    median = med[np.repeat(np.arange(n_users), per)]
-    big = rng.random(n) < g.ratio.big_prob
+    # --- genuine payments
+    user_median = user_medians(cfg, rng)
+    if n_users != cfg.sizes.n_users:
+        user_median = user_median[:n_users]
+    n = n_users * per_user
+    median = np.repeat(user_median, per_user)
+    big = rng.random(n) < lp.big_payment_prob
     ratio = np.where(
         big,
-        rng.uniform(g.ratio.big_low, g.ratio.big_high, n),
-        np.exp(g.ratio.sigma * rng.standard_normal(n)),
+        rng.uniform(lp.big_ratio_low, lp.big_ratio_high, n),
+        np.exp(lp.ratio_sigma * rng.standard_normal(n)),
     )
+    true_sim = rng.random(n) < lp.true_sim_change
+    true_remote = rng.random(n) < lp.true_remote
     flags = {
-        "new_device": rng.random(n) < L.new_device,
-        "new_payee": rng.random(n) < L.new_payee,
-        "velocity": rng.random(n) < L.velocity,
-        "far_location": rng.random(n) < L.far_location,
-        "sim_change": (rng.random(n) < L.true_sim_change) & (rng.random(n) < cov.sim_feed),
-        "remote": (rng.random(n) < L.true_remote) & (rng.random(n) < cov.remote),
+        "new_device": rng.random(n) < lp.new_device,
+        "new_payee": rng.random(n) < lp.new_payee,
+        "velocity": rng.random(n) < lp.velocity,
+        "far_location": rng.random(n) < lp.far_location,
+        "sim_change": true_sim & (rng.random(n) < g.coverage.sim_change),
+        "remote": true_remote & (rng.random(n) < g.coverage.remote),
     }
-    legit = _frame("legit", None, median, ratio, flags, _network(rng, L.network, n),
-                   _pick(rng, L.fri, n))
+    legit_df = make_frame("legit", None, median, ratio, flags,
+                          _NETS[rng.choice(3, size=n, p=[lp.network.home, lp.network.mobile,
+                                                          lp.network.public])],
+                          _pick(rng, lp.fri, n))
 
-    # attacks
+    # --- attacks
     parts = []
     for t in ATTACK_TYPES:
-        A = cfg.attacks[t]
-        m = med[rng.integers(0, n_users, n_att)]
-        r = np.maximum(1.2, np.exp(np.log(A.median_multiple) + A.sigma * rng.standard_normal(n_att)))
-        net_idx = _pick(rng, [A.network[k] for k in NETWORKS], n_att)
-        velocity = rng.random(n_att) < A.velocity
-        fri = _pick(rng, A.fri, n_att)
-        if g.evasive:
-            ep = g.evasive_params
-            look_normal = rng.random(n_att) < ep.look_normal_prob
-            r = np.where(look_normal, 1.0 + rng.random(n_att), r)
-            velocity = np.zeros(n_att, dtype=bool)
-            net_idx = np.where(net_idx == 2, 1, net_idx)
-            fri = np.where(rng.random(n_att) < ep.fri_zero_prob, 0, fri)
-        flags = {
-            "new_device": rng.random(n_att) < A.new_device,
-            "new_payee": rng.random(n_att) < A.new_payee,
-            "velocity": velocity,
-            "far_location": rng.random(n_att) < A.far_location,
-            "sim_change": (rng.random(n_att) < A.sim_change) & (rng.random(n_att) < cov.sim_feed),
-            "remote": (rng.random(n_att) < A.remote) & (rng.random(n_att) < cov.remote),
-        }
-        parts.append(_frame("attack", t, m, r, flags, np.array(NETWORKS)[net_idx], fri))
-    attacks = pd.concat(parts, ignore_index=True)
-
-    # the shared random draw is generated last, so adding features never reshuffles it
-    legit["u"] = rng.random(len(legit))
-    attacks["u"] = rng.random(len(attacks))
-    return legit, attacks
+        parts.append(generate_attack_type(
+            t, attack_spec(cfg, t), user_median, n_att, rng, ev, g.coverage,
+            g.evasive_params if g.evasive else None))
+    attacks_df = pd.concat(parts, ignore_index=True)
+    attacks_df["u"] = rng.random(len(attacks_df))
+    return legit_df, attacks_df

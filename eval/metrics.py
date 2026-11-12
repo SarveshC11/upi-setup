@@ -1,115 +1,131 @@
-"""Evaluation metrics (owner: Person 3).
+"""Evaluation metrics.
 
-All policies are evaluated on the same payments and the same random draw `u`, so differences
-between policies are not noise. Friction numbers are per 1,000 genuine payments.
+INTERIM STAND-IN (owner: Person 3). Written by Person 4 from guide section B3 so /simulate and
+the parity tests work. Person 3's version (with ablation, sensitivity, plots and
+run_experiment) replaces this; evaluate() and sweep() must keep these signatures.
 """
+
 from __future__ import annotations
 
-import copy
+from collections.abc import Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 
-from policy.engine import SIGNAL_GROUPS, make_engine
-from sim.attacks import ATTACK_TYPES
-
-TIER_CODES = ("0", "W", "1", "2", "3")
-_IDX = {t: i for i, t in enumerate(TIER_CODES)}
+from common.config import ATTACK_TYPES, TIERS, CostConfig
+from policy.engine import DEFAULT_THRESHOLDS, SIGNAL_GROUPS, Policy, make_engine
 
 
-def _codes(tiers: pd.Series) -> np.ndarray:
-    codes = tiers.map(_IDX)
-    if codes.isna().any():
-        bad = sorted(set(tiers[codes.isna()]))
-        raise ValueError(f"unknown tier codes from policy: {bad}")
-    return codes.to_numpy(dtype=int)
+def evaluate(policy: Policy, legit: pd.DataFrame, attacks: pd.DataFrame,
+             assume: CostConfig) -> dict:
+    if isinstance(assume, Mapping):
+        friction = assume["friction"]
+        abandon = assume["abandon"]
+        p_stop = assume["p_stop"]
+    else:
+        friction = assume.friction.as_dict()
+        abandon = assume.abandon.as_dict()
+        p_stop = assume.p_stop.as_dict()
 
+    tier_idx = {t: i for i, t in enumerate(TIERS)}
+    type_idx = {t: i for i, t in enumerate(ATTACK_TYPES)}
+    fr_tab = np.array([friction[t] for t in TIERS])
+    ab_tab = np.array([abandon[t] for t in TIERS])
+    ps_tab = np.array([[p_stop[t][a] for a in ATTACK_TYPES] for t in TIERS])
 
-def evaluate(policy, legit: pd.DataFrame, attacks: pd.DataFrame, assume) -> dict:
-    """assume = cfg.costs (friction, abandon, p_stop). Returns a dict of metrics."""
-    fr = np.array([assume["friction"][t] for t in TIER_CODES], dtype=float)
-    ab = np.array([assume["abandon"][t] for t in TIER_CODES], dtype=float)
-    ps = np.array([[assume["p_stop"][t][a] for a in ATTACK_TYPES] for t in TIER_CODES], dtype=float)
-
-    lt = _codes(policy(legit))
+    lt = policy(legit).to_numpy()
     n = len(legit)
-    out = {
-        "friction": fr[lt].sum() / n * 1000,
-        "extra": float((lt != _IDX["0"]).mean() * 1000),
-        "abandoned": float((legit["u"].to_numpy() < ab[lt]).mean() * 1000),
-        "holds": float((lt == _IDX["2"]).mean() * 1000),
-        "blocks": float((lt == _IDX["3"]).mean() * 1000),
-    }
+    per_k = 1000.0 / n if n else 0.0
+    li = pd.Series(lt).map(tier_idx).to_numpy(dtype=int)
+    fr = fr_tab[li]
+    ab = ab_tab[li]
 
-    at = _codes(policy(attacks))
-    ti = attacks["attack_type"].map({a: i for i, a in enumerate(ATTACK_TYPES)}).to_numpy(dtype=int)
-    stopped = attacks["u"].to_numpy() < ps[at, ti]
-    amount = attacks["amount"].to_numpy(dtype=float)
-    total = float(amount.sum())
-    prevented = float(amount[stopped].sum())
-    out.update({
-        "prevented": prevented / total * 100 if total else 0.0,
-        "lost": total - prevented,
-        "total": total,
-    })
-    per = {}
-    for i, a in enumerate(ATTACK_TYPES):
-        m = ti == i
-        per[a] = {"n": int(m.sum()), "stopped": int(stopped[m].sum()),
-                  "share": float(stopped[m].mean()) if m.any() else 0.0}
-    out["per_type"] = per
+    at = policy(attacks).to_numpy()
+    types = attacks["attack_type"].to_numpy()
+    ai = pd.Series(at).map(tier_idx).to_numpy(dtype=int)
+    ps = ps_tab[ai, pd.Series(types).map(type_idx).to_numpy(dtype=int)]
+    stopped = attacks["u"].to_numpy() < ps
+    amt = attacks["amount"].to_numpy(dtype=float)
+    total = amt.sum()
+    prevented = amt[stopped].sum()
+
+    result = {
+        "friction": float(fr.sum() * per_k),
+        "extra": float((lt != "0").sum() * per_k),
+        "abandoned": float((legit["u"].to_numpy() < ab).sum() * per_k),
+        "holds": float((lt == "2").sum() * per_k),
+        "blocks": float((lt == "3").sum() * per_k),
+        "prevented_pct": float(100.0 * prevented / total) if total else 0.0,
+        "lost": float(total - prevented),
+        "per_type_stopped": {
+            t: float(stopped[types == t].mean()) if (types == t).any() else 0.0
+            for t in ATTACK_TYPES
+        },
+    }
+    result["total"] = float(total)
+    result["prevented"] = float(100.0 * prevented / total) if total else 0.0
+    result["per_type"] = {
+        t: {
+            "n": int((types == t).sum()),
+            "stopped": int(stopped[types == t].sum()),
+            "share": result["per_type_stopped"][t],
+        }
+        for t in ATTACK_TYPES
+    }
+    return result
+
+
+def sweep(weights: Mapping[str, int], legit: pd.DataFrame, attacks: pd.DataFrame,
+          assume: CostConfig, shifts: Iterable[int],
+          thresholds: Sequence[int] = DEFAULT_THRESHOLDS) -> list[dict]:
+    out = []
+    for d in shifts:
+        m = evaluate(make_engine(weights, d, thresholds), legit, attacks, assume)
+        out.append({"shift": int(d), **m})
     return out
 
 
-def sweep(weights, legit, attacks, assume, shifts, make_policy=None) -> list[dict]:
-    """Evaluate a policy family at each strictness shift d (thresholds are base + d).
-
-    By default the family is the points engine with `weights`. Pass `make_policy(d)` to sweep
-    another family, for example the ML baseline.
-    """
-    rows = []
-    for d in shifts:
-        policy = make_policy(d) if make_policy is not None else make_engine(weights, d)
-        m = evaluate(policy, legit, attacks, assume)
-        m["shift"] = d
-        rows.append(m)
-    return rows
+def scale_costs(assume, friction: float = 1.0, stop: float = 1.0) -> dict:
+    if isinstance(assume, Mapping):
+        source = assume
+    else:
+        source = {
+            "friction": assume.friction.as_dict(),
+            "abandon": assume.abandon.as_dict(),
+            "p_stop": assume.p_stop.as_dict(),
+        }
+    return {
+        "friction": {t: v * friction for t, v in source["friction"].items()},
+        "abandon": {t: min(1.0, v * friction) for t, v in source["abandon"].items()},
+        "p_stop": {
+            t: {a: min(1.0, p * stop) for a, p in row.items()}
+            for t, row in source["p_stop"].items()
+        },
+    }
 
 
 def ablation(weights, shift, legit, attacks, assume) -> list[dict]:
-    """Switch off one signal group at a time and report the change against the full engine."""
     base = evaluate(make_engine(weights, shift), legit, attacks, assume)
     rows = []
     for group, keys in SIGNAL_GROUPS.items():
-        w2 = copy.deepcopy(dict(weights))
-        for k in keys:
-            w2[k] = 0
-        m = evaluate(make_engine(w2, shift), legit, attacks, assume)
+        reduced = dict(weights)
+        for key in keys:
+            reduced[key] = 0
+        result = evaluate(make_engine(reduced, shift), legit, attacks, assume)
         rows.append({
             "group": group,
-            "prevented": m["prevented"], "friction": m["friction"],
-            "d_prevented": m["prevented"] - base["prevented"],
-            "d_friction": m["friction"] - base["friction"],
+            "prevented": result["prevented"],
+            "friction": result["friction"],
+            "d_prevented": result["prevented"] - base["prevented"],
+            "d_friction": result["friction"] - base["friction"],
         })
     return rows
 
 
-def scale_costs(assume, friction: float = 1.0, stop: float = 1.0) -> dict:
-    """Sensitivity helper. `friction` scales friction points and abandonment chances;
-    `stop` scales the chance that an action stops an attack. Probabilities are capped at 1."""
-    return {
-        "friction": {t: v * friction for t, v in assume["friction"].items()},
-        "abandon": {t: min(1.0, v * friction) for t, v in assume["abandon"].items()},
-        "p_stop": {t: {a: min(1.0, p * stop) for a, p in row.items()}
-                   for t, row in assume["p_stop"].items()},
-    }
-
-
 def best_prevented_within(curve: list[dict], budget: float) -> float:
-    """Highest fraud-stopped % among sweep points whose friction does not exceed `budget`."""
-    ok = [r["prevented"] for r in curve if r["friction"] <= budget + 1e-9]
-    return max(ok) if ok else 0.0
+    values = [row["prevented"] for row in curve if row["friction"] <= budget + 1e-9]
+    return max(values) if values else 0.0
 
 
-def scalar_metrics(m: dict) -> dict:
-    return {k: v for k, v in m.items() if k != "per_type"}
+def scalar_metrics(metrics: dict) -> dict:
+    return {key: value for key, value in metrics.items() if key != "per_type"}
