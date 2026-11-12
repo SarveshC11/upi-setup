@@ -23,6 +23,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+DEFAULT_PATH = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
+
 TIERS = ("0", "W", "1", "2", "3")
 ENGINE_TIERS = ("0", "1", "2", "3")
 ATTACK_TYPES = ("simswap", "screenshare", "collect", "replay", "stolen")
@@ -408,7 +410,7 @@ def _validate(data: dict, source: str) -> Config:
 
 
 def load_config(
-    path: str | Path,
+    path: str | Path | None = None,
     override_files: Iterable[str | Path] = (),
     overrides: Mapping[str, Any] | None = None,
 ) -> Config:
@@ -416,9 +418,14 @@ def load_config(
 
     Later override files win over earlier ones; the ``overrides`` dict is applied last.
     """
-    data = _read_yaml(Path(path))
+    data = _read_yaml(Path(path or DEFAULT_PATH))
     for f in override_files:
         data = _deep_merge(data, _read_yaml(Path(f)))
     if overrides:
         data = _apply_overrides(data, overrides)
-    return _validate(data, source=str(path))
+    return _validate(data, source=str(path or DEFAULT_PATH))
+
+
+def with_overrides(cfg: Config, overrides: Mapping[str, Any]) -> Config:
+    """Compatibility wrapper for callers using the original functional API."""
+    return cfg.with_overrides(overrides)

@@ -22,6 +22,16 @@ COLUMNS = [
 _NETS = np.array(["home", "mobile", "public"], dtype=object)
 
 
+def user_medians(cfg: Config, rng: np.random.Generator) -> np.ndarray:
+    """Generate the per-user median amounts used by the simulator."""
+    lp = cfg.generator.legit
+    return np.clip(
+        np.round(rng.lognormal(np.log(lp.median_center), lp.median_sigma, cfg.sizes.n_users)),
+        lp.median_min,
+        lp.median_max,
+    ).astype(int)
+
+
 def _network(rng: np.random.Generator, mix, n: int) -> np.ndarray:
     return _NETS[rng.choice(3, size=n, p=[mix.home, mix.mobile, mix.public])]
 
@@ -47,10 +57,9 @@ def generate(
     rng = np.random.default_rng(seed)
 
     # --- genuine payments
-    user_median = np.clip(
-        np.round(rng.lognormal(np.log(lp.median_center), lp.median_sigma, n_users)),
-        lp.median_min, lp.median_max,
-    ).astype(int)
+    user_median = user_medians(cfg, rng)
+    if n_users != cfg.sizes.n_users:
+        user_median = user_median[:n_users]
     n = n_users * per_user
     median = np.repeat(user_median, per_user)
     big = rng.random(n) < lp.big_payment_prob

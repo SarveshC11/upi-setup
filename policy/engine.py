@@ -125,3 +125,15 @@ def make_engine(
         return pd.Series(codes[np.searchsorted(edges, s, side="right")], index=df.index)
 
     return policy
+
+
+def tier_from_score(
+    scores: np.ndarray | int, shift: int = 0,
+    base: Sequence[int] = DEFAULT_THRESHOLDS,
+) -> np.ndarray | str:
+    """Compatibility helper for converting one score or an array of scores to tiers."""
+    values = np.asarray(scores)
+    edges = np.array([t + shift for t in base])
+    codes = np.array(["0", "1", "2", "3"], dtype=object)
+    result = codes[np.searchsorted(edges, values, side="right")]
+    return result.item() if values.ndim == 0 else result
