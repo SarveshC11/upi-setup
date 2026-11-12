@@ -27,6 +27,7 @@ function parseArgs(argv) {
     if (a === "--reference") out.reference = argv[++i];
     else if (a === "--seeds") out.seeds = argv[++i].split(",").map(Number);
     else if (a === "--config-json") out.configJson = argv[++i];
+    else if (/^-?\d+$/.test(a)) out.seeds = [Number(a)];
     else if (a === "--help" || a === "-h") {
       console.log("usage: node tools/run_reference.js --seeds 1,2 [--reference f] [--config-json f|-]");
       process.exit(0);
@@ -65,10 +66,94 @@ function pick(api, names, what) {
 
 // ------------------------------------------------------------------ ADAPTER
 
+function isCanonicalReference(api) {
+  return api.policies && typeof api.policies === "object" &&
+    typeof api.thresholds === "function";
+}
+
+function toReferenceTx(tx) {
+  const names = {
+    new_device: "newDevice", new_payee: "newPayee", sim_change: "simChange",
+    far_location: "farLocation",
+  };
+  const out = { ...tx };
+  for (const [source, target] of Object.entries(names)) {
+    if (source in out && !(target in out)) out[target] = out[source];
+  }
+  return out;
+}
+
+function toReferenceWeights(weights) {
+  if (!weights) return undefined;
+  const names = {
+    new_device: "newDevice", net_mobile: "netMobile", net_public: "netPublic",
+    new_payee: "newPayee", amt_2x_10x: "amt2", amt_over_10x: "amt10",
+    velocity: "velocity", sim_change: "simChange", remote: "remote",
+    far_location: "farLocation", fri_1: "friMed", fri_2: "friHigh",
+    fri_3: "friVeryHigh",
+  };
+  const out = {};
+  for (const [source, target] of Object.entries(names)) {
+    if (source in weights) out[target] = weights[source];
+  }
+  return out;
+}
+
+function toReferenceGenerateOptions(cfg, seed) {
+  const sizes = cfg && cfg.sizes ? cfg.sizes : {};
+  return {
+    users: sizes.n_users ?? sizes.users ?? 1000,
+    legitPerUser: sizes.payments_per_user ?? sizes.legit_per_user ?? 30,
+    attacksPerType: sizes.attacks_per_type ?? 250,
+    evasive: !!(cfg && cfg.generator && cfg.generator.evasive),
+    seed,
+  };
+}
+
+function toReferenceCosts(cfg) {
+  const costs = cfg && cfg.costs ? cfg.costs : {};
+  return {
+    friction: costs.friction || {},
+    abandon: costs.abandon || {},
+    pStop: costs.p_stop || costs.pStop || {},
+    simFeedCoverage: cfg?.generator?.coverage?.sim_change ?? 0.9,
+    remoteCoverage: cfg?.generator?.coverage?.remote ?? 0.85,
+  };
+}
+
 function makeAdapter(api) {
   const scoreFn = pick(api, ["score", "scoreTx", "scorePayment"], "score(tx, weights)");
   const generateFn = pick(api, ["generate", "simulate", "generateData"], "generate(cfg, seed)");
   const evaluateFn = pick(api, ["evaluate", "evaluatePolicy"], "evaluate(policy, legit, attacks, assume)");
+  if (isCanonicalReference(api)) {
+    return {
+      score: (tx, cfg) => {
+        const weights = toReferenceWeights(cfg?.policy?.weights) || api.DEFAULT_W;
+        const r = scoreFn(toReferenceTx(tx), weights);
+        return typeof r === "number" ? r : Array.isArray(r) ? r[0] : r.score;
+      },
+      generate: (cfg, seed) => generateFn(
+        toReferenceGenerateOptions(cfg, seed), toReferenceCosts(cfg)),
+      policies: (cfg) => {
+        const weights = toReferenceWeights(cfg?.policy?.weights) || api.DEFAULT_W;
+        const thresholds = api.thresholds(
+          cfg?.policy?.shift || 0);
+        const factory = api.policies;
+        const scalar = (fn) => (rows) =>
+          Array.isArray(rows) ? rows.map((row) => fn(toReferenceTx(row))) : fn(toReferenceTx(rows));
+        return {
+          pin_only: scalar(factory.pinOnly()),
+          always_strict: scalar(factory.alwaysStrict()),
+          amount_rule: scalar(factory.amountRule(cfg?.baselines?.amount_rule_threshold)),
+          fri_only: scalar(factory.friOnly()),
+          engine: scalar(factory.engine(weights, thresholds)),
+        };
+      },
+      evaluate: (policy, data, cfg) => evaluateFn(
+        policy, data, cfg ? toReferenceCosts(cfg) : api.DEFAULT_A),
+    };
+  }
+
   const engineFn = pick(api, ["makeEngine", "make_engine", "engine"], "makeEngine(weights, shift)");
   const baselinesFn = pick(api, ["getBaselines", "get_baselines", "baselines"], "getBaselines(cfg)");
   return {
@@ -144,7 +229,13 @@ function main() {
   for (const [name, row] of Object.entries(per)) {
     aggregates[name] = Object.fromEntries(Object.entries(row).map(([k, v]) => [k, mean(v)]));
   }
-  process.stdout.write(JSON.stringify({ seeds: args.seeds, golden, aggregates }, null, 2) + "\n");
+  const legacyPolicies = Object.fromEntries(
+    Object.entries(aggregates).map(([name, row]) => [
+      name, { ...row, prevented: row.prevented_pct },
+    ])
+  );
+  process.stdout.write(JSON.stringify(
+    { seeds: args.seeds, golden, aggregates, ...legacyPolicies }, null, 2) + "\n");
 }
 
 main();
