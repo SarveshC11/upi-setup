@@ -6,15 +6,29 @@ All data is synthetic, and all numbers are version 1 placeholders, not real UPI 
 
 ## Quick start
 
+The project is self-contained and uses synthetic data. Anyone with Python 3.11+
+can run the tests, API, and browser demo locally.
+
 ```bash
 python -m venv .venv
-.venv/Scripts/activate            # Windows  (source .venv/bin/activate on Linux/macOS)
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+# Linux/macOS: source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest                            # config, API, golden and parity tests
-uvicorn service.api:app --port 8000
-# open http://127.0.0.1:8000/     (API docs at /docs)
+python -m pytest
+python -m uvicorn service.api:app --host 127.0.0.1 --port 8000
+# open http://127.0.0.1:8000/ui/ (API docs at /docs)
 ```
+
+On Windows, the complete local workflow is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_all.ps1
+```
+
+Use `-SkipServe` to run linting, tests, and the experiment without starting
+the server.
 
 Docker:
 
@@ -23,8 +37,8 @@ docker build -t upi-stepup .
 docker run --rm -p 8000:8000 upi-stepup
 ```
 
-Everything at once: `make all`, or on Windows
-`powershell -ExecutionPolicy Bypass -File scripts\run_all.ps1`.
+The committed production frontend is served by FastAPI, so Node.js is not
+required for the normal demo.
 
 ## Configuration
 
@@ -85,25 +99,33 @@ npm run dev      # live-reloading UI at http://localhost:5173/ui/ (start uvicorn
 npm run build    # rebuild service/web, then commit frontend/ and service/web/ together
 ```
 
-Tabs: **Simulation** (trade-off curve, strictness sweep, policy comparison), **Score a payment**
-(itemised decision and baseline comparison), **Decision log**. A link such as
-`/ui/#SIM-swap%20fraud` opens with that scenario already scored.
+Tabs: **Simulation** (trade-off curve, strictness sweep, policy comparison),
+**Score a payment** (a realistic phone-style checkout where you enter an amount
+and see the required authentication), and **Decision log**. Use **Details** in
+the payment screen to test individual risk signals such as a new device, SIM
+change, remote-access app, or unusual location.
 
 ## Tools
 
 * `python -m tools.parity` prints the golden scores, the Python aggregates over 10 seeds, a
   comparison with the reference table, and the JS reference results when
   `reference/upi_reference_core.js` is present.
-* `node tools/run_reference.js --seeds 1,2,3` runs the JS reference on its own.
+* `node tools/run_reference.js --seeds 1,2,3` runs the JavaScript reference on its own.
 * `python -m tools.bench_latency` measures `/score` latency and throughput plus batch engine
   time, and writes `results/latency.md` and `results/latency.json`.
 
-## Ownership
+## Team contributions
+
+The branches have been integrated into `main`. The implementation is split
+into four connected parts:
 
 | Part | Owner | Status in this repo |
 |---|---|---|
-| `common/config.py`, `configs/default.yaml`, `service/*`, `tools/*`, CI, Docker, packaging, `tests/test_config.py`, `tests/test_api.py`, `tests/test_parity.py` | Person 4 | done |
-| `sim/*` | Person 1 | interim stand-in from the guide spec (marked in file) |
-| `policy/*` | Person 2 | interim stand-in from the guide spec (marked in file) |
-| `baselines/*`, `eval/*` | Person 3 | interim stand-in: `get_baselines`, `evaluate`, `sweep` |
-| `reference/upi_reference_core.js` | shared, read-only | not yet added; the JS parity test skips until it is |
+| Simulator and attack scenarios (`sim/*`) | Person 1 | integrated |
+| Risk policy and calibration (`policy/*`, calibrated configs) | Person 2 | integrated |
+| Evaluation and comparison (`baselines/*`, `eval/*`, metrics and parity tests) | Person 3 | integrated |
+| API, web app, configuration, CI, Docker, and packaging (`service/*`, `frontend/*`, `common/*`, `tools/*`) | Person 4 | integrated |
+
+All tests pass on the integrated branch. The repository is a research/demo
+prototype: numbers are synthetic placeholders and are not production fraud
+rates or a real banking service.
