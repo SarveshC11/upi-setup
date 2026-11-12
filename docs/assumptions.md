@@ -1,58 +1,47 @@
-# Assumptions register (owner: Person 3)
+# Assumptions
 
-Every number in the simulator that is a guess, with where it lives and how we justify it. The paper
-reports sensitivity to the costs in section 1, so those are the ones that need honest wording.
+Every assumption is recorded here as it is made (team rule A7). Person 3 owns this file and
+the cost-model section; each person adds the entries for their own part.
 
-All values below are the v1 placeholders in `configs/default.yaml`. Replace each "Source" cell with a
-real reference or write "judgement" plainly.
+## Platform and service (Person 4)
 
-## 1. Cost model (`costs:`)
-
-| Quantity | Value | Source | Sensitivity run? |
-|---|---|---|---|
-| Friction points: warning / step-up / hold / block | 0.5 / 1 / 5 / 10 | judgement: relative annoyance, step-up = 1 | yes, x0.5 and x2 |
-| Giving-up chance: warning / step-up / hold / block | 1% / 2% / 25% / 60% | judgement; compare checkout-abandonment studies | yes, scaled with friction |
-| Chance an action stops an attack, per tier and attack type | table in config | judgement: e.g. a hold gives the victim 30 min to notice | yes, x0.5 and x2 |
-
-## 2. Data generation (`generator:`, `attacks:`)
-
-| Quantity | Value | Source |
-|---|---|---|
-| Payment amounts: per-user median, spread | in config | judgement; no public UPI per-user data |
-| New-payee rate for genuine payments | about 12% | judgement; check against any published figure |
-| SIM-change feed coverage | 0.90 | assumption: telecom feed is not complete |
-| Remote-access detection coverage | 0.85 | assumption: detection is imperfect |
-| Attack signal mix per attack type | in config | modelled on public descriptions of each attack |
-
-## 3. What the results do and do not claim
-
-- Data is synthetic. Results show how the policies compare under these assumptions, not real-world rates.
-- The ML baseline is trained on data from the same generator, so it is an upper-bound reference, not a fair rival.
-  On the v1 run it beats the rules engine at low friction. State this in the paper; our argument for the
-  rules engine is transparency (every action has a readable reason), not raw accuracy.
-- Evasive-attacker runs hide mutable signals; immutable ones (new device, SIM change) cannot be hidden.
-
-## 4. Open decisions
-
-- [ ] Hold delivery: does a 30-minute hold ask for a confirmation tap, or only wait? Pick one and document it.
-- [ ] Replace placeholder costs with literature values where any exist (log them in `docs/literature.csv`).
-
-## 5. Simulator and learned attacker (owner: Person 1)
-
-| Quantity | Value | Where | Note |
-|---|---|---|---|
-| Attack signal mix, amounts, `immutable` lists | per attack type | `attacks:` | judgement; immutable = signal the attack cannot work without (simswap: SIM change, screenshare: remote app, collect and stolen: new payee) |
-| Evasive variant | 60% look-normal amounts, no velocity, no public network, 85% clean payee number | `generator.evasive_params` | hand-written; the evasive random draws use a separate stream, so normal and evasive runs of one seed share every other number (paired) |
-| Attacker probe budget | 120 policy probes per attacker | `attacker.tries` | a real attacker cannot test a bank's policy without limit; 40% random search, then CMA-ES |
-| Attacker amount cap | Rs 1,00,000 per payment, applied to every attacker alike | `attacker.max_amount` | assumed UPI per-payment limit, **verify against NPCI before the paper**; without a cap the learned attacker simply inflates amounts |
-| Attacker knowledge | probes the policy and sees the outcome (white-box on results, not on the weights) | `sim/attacker.py` | strong-attacker assumption, so the worst-case curve is a lower bound for the policy |
-| Train / test seeds | train 1-3, test 101-105 | `attacker.train_seeds`, `attacker.test_seeds` | attacker never sees the test seeds |
-| Held-out attack type | `collect` (configurable) | `attacker.held_out` | one shared strategy is trained on the other four types and tested on this one |
-| Learned attacker's adjustable parameters | up to 10 per type (8 to 10 after immutable signals are frozen) | `PARAMS` in `sim/attacker.py` | amount level and spread, velocity, far-location, network mix, clean-payee routing, new device, new payee, hiding SIM/remote signals |
-
-The attacker's CMA-ES needs `pip install -e ".[opt]"`. Without it the code warns and uses a built-in evolution
-strategy, so numbers differ slightly. The committed attacker results were produced with `cma` installed.
-
-Reading the results: compare attackers by **% of attacked rupees stopped** (`*_prevented`). Rupees lost (`*_lost`)
-are not comparable across attackers because the learned attacker chooses larger amounts.
-`generate()` does not apply the amount cap; only the attacker experiments do.
+1. **Config is the single source of numbers.** `configs/default.yaml` holds every value from
+   the team guide. `common/config.py` rejects unknown and missing keys and checks ranges
+   (probabilities in [0, 1], distributions summing to 1, thresholds strictly increasing,
+   weights 0 to 100). Tier codes are strings (`"0"`, `"W"`, `"1"`, `"2"`, `"3"`). Unquoted
+   YAML keys such as `0:` are normalised to strings so either spelling works.
+2. **Attack amounts are parametrised by their median ratio.** The guide writes `mu = ln 25`.
+   The config stores `ratio_center: 25` and the generator takes the log, which keeps the
+   file readable. The same applies to the genuine `median_center: 400`.
+3. **Policy version** is the first 12 hex characters of SHA-256 over the weights and the
+   *effective* thresholds (base + shift). Moving the strictness slider therefore changes
+   the version, so every logged decision can be tied to the exact rule that made it.
+4. **Thresholds in API responses are effective thresholds** (base + shift). `GET /policy`
+   returns both the base thresholds and the shift.
+5. **Score requests**: `ratio` is computed by the service as `amount / median`. Amount and
+   median must be greater than 0. Amount is capped by `service.max_amount` (Rs 1 crore,
+   a sanity limit, not a UPI rule). Booleans must be real JSON booleans (`"yes"` and `1`
+   are rejected), and unknown fields are rejected so typos do not pass silently.
+6. **Policy updates are in memory only.** `POST /policy` changes the running service and is
+   lost on restart. `{"reset": true}` returns to the config values. A real deployment
+   would version policies in a store with an approval step.
+7. **Decision log** is one JSON line per scored payment (single and batch), written by a
+   single process with a lock. Rejected (invalid) requests are not logged. Multiple
+   uvicorn workers would need a shared log sink; the demo runs one worker.
+8. **`/simulate` sizes are capped** (`service.simulate_limits`: 300 users, 30 payments each,
+   100 attacks per type) so a browser click cannot tie up the service. Full-size runs
+   belong in `eval.run_experiment`.
+9. **Parity acceptance** follows guide B4.5: golden scores must match exactly; aggregates
+   averaged over seeds 1 to 10 must be within 3 percentage points of the reference on
+   fraud stopped and within 10% on friction (with an absolute floor of 3 friction points
+   for values near zero). The published targets are single-seed (seed 7) numbers, so this
+   compares a 10-seed mean with one seed. The engine's fraud stopped is the closest call
+   (76.3% vs 79.2%, a gap of 2.9 pp). See `docs/paper/system_design.md`.
+10. **Collect requests.** NPCI withdrew P2P collect requests from 1 October 2025 (circular of
+    29 July 2025, confirmed through news coverage so far). The `collect` attack should be
+    read as a merchant-style collect request. Person 1 and Person 3 should confirm this
+    framing.
+11. **Interim modules.** `sim/generate.py`, `policy/engine.py`, `baselines/__init__.py`
+    and `eval/metrics.py` are interim stand-ins written by Person 4 from the guide so
+    the service and tests run. Each file says so at the top and will be replaced by
+    its owner's version without changing the interface.

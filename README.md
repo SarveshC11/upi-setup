@@ -1,43 +1,109 @@
-# upi-stepup: adaptive step-up authentication for UPI
+# upi-stepup
 
-A transparent rule-based risk score (0 to 100) maps each UPI payment's signals to an action tier
-(PIN only, step-up, hold, block). It is evaluated in a synthetic simulator on a
-fraud-stopped versus friction trade-off against baselines.
+Adaptive step-up authentication for UPI-style payments: a simulator, an explainable
+rule-based policy engine, an evaluation pipeline, and a decision service with a web app.
+All data is synthetic, and all numbers are version 1 placeholders, not real UPI fraud rates.
 
-Full role descriptions: `docs/team_work_guide.md`. Assumptions behind every number: `docs/assumptions.md`.
-
-## Who owns what
-
-| Person | Lane | Folders |
-|---|---|---|
-| 1 | Simulator and attacker | `sim/`, `tests/test_marginals.py` |
-| 2 | Scoring engine and calibration | `policy/` |
-| 3 | Experiment pipeline | `baselines/`, `eval/`, `configs/`, `docs/assumptions.md`, `docs/literature.csv` |
-| 4 | Service and demo | `service/`, `reference/` (the JS simulator, for parity checks) |
-
-Shared contract: the payment table columns listed in `docs/team_work_guide.md` (section A3). Do not
-change a column name without telling everyone.
-
-## Setup
+## Quick start
 
 ```bash
-python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
+python -m venv .venv
+.venv/Scripts/activate            # Windows  (source .venv/bin/activate on Linux/macOS)
 pip install -e ".[dev]"
-pytest -q                                              # all green before you start
-python -m eval.run_experiment --out results/quick --quick   # about 7 s
-python -m eval.run_experiment --out results/default         # about 35 s, full run
+
+pytest                            # config, API, golden and parity tests
+uvicorn service.api:app --port 8000
+# open http://127.0.0.1:8000/     (API docs at /docs)
 ```
 
-Outputs land in `results/<name>/` (CSV tables plus `plots/*.png`). `results/` is git-ignored except
-`results/final/`, where we commit the numbers that go into the paper.
+Docker:
 
-## Git workflow
+```bash
+docker build -t upi-stepup .
+docker run --rm -p 8000:8000 upi-stepup
+```
 
-1. `git switch main && git pull`
-2. `git switch -c p3/short-description` (prefix with your person number)
-3. Work, then `pytest -q && ruff check .`
-4. `git add <files> && git commit -m "eval: add ablation plot"`
-5. `git push -u origin p3/short-description`, open a Pull Request into `main`
-6. One teammate reviews, then squash-merge. Never push straight to `main`.
+Everything at once: `make all`, or on Windows
+`powershell -ExecutionPolicy Bypass -File scripts\run_all.ps1`.
 
-Keep commits small. Do not commit large files, `.venv`, or anything in `results/` except `results/final/`.
+## Configuration
+
+```python
+from common.config import load_config
+cfg = load_config("configs/default.yaml")
+cfg = load_config("configs/default.yaml", override_files=["configs/my_override.yaml"])
+cfg = load_config("configs/default.yaml", overrides={"costs.friction.2": 10})
+cfg2 = cfg.with_overrides({"generator.evasive": True})
+```
+
+An override file can contain only the keys it changes and can name its base:
+
+```yaml
+extends: default.yaml
+costs:
+  friction: {"2": 10, "3": 20}
+```
+
+Unknown or missing keys raise `ConfigError` with the full key path, for example
+`unknown key 'policy.weigths'` or `missing key 'policy.weights.remote'`.
+
+## Decision service API
+
+| Endpoint | Does |
+|---|---|
+| `GET /health` | status, policy version, config fingerprint |
+| `GET /policy` | weights, base and effective thresholds, shift |
+| `POST /policy` | partial update `{"weights": {...}, "shift": -10, "thresholds": [..]}` or `{"reset": true}` |
+| `POST /score` | score one payment, with breakdown |
+| `POST /score/batch` | `{"payments": [...]}` (max 1000) |
+| `POST /compare` | engine result plus each baseline's tier |
+| `POST /simulate` | small seeded simulation, returns the trade-off curve and baseline points |
+| `GET /decisions?limit=50` | recent decision-log entries, newest first |
+| `/ui/` | the web app |
+
+Example:
+
+```bash
+curl -s localhost:8000/score -H "Content-Type: application/json" -d '{"amount":45000,"median":250,"network":"home","new_device":false,"new_payee":true,"velocity":false,"sim_change":false,"remote":true,"far_location":false,"fri":0}'
+# {"score":70,"raw_total":70,"tier":"3","tier_name":"Block and call back",
+#  "breakdown":[{"signal":"new_payee","points":15},{"signal":"amt_over_10x","points":25},
+#               {"signal":"remote","points":30}],"thresholds":[20,50,70],"policy_version":"..."}
+```
+
+Environment variables: `UPI_CONFIG` (config path) and `UPI_DECISION_LOG` (log path).
+
+## Web app
+
+The browser UI in `frontend/` is React + TypeScript (Vite) with shadcn/ui components,
+shadcn charts (Recharts) and Motion animations. Its production build lives in `service/web/`
+and is committed, so running the service needs no Node. Only people changing the UI need it:
+
+```bash
+cd frontend
+npm ci
+npm run dev      # live-reloading UI at http://localhost:5173/ui/ (start uvicorn on :8000 first)
+npm run build    # rebuild service/web, then commit frontend/ and service/web/ together
+```
+
+Tabs: **Simulation** (trade-off curve, strictness sweep, policy comparison), **Score a payment**
+(itemised decision and baseline comparison), **Decision log**. A link such as
+`/ui/#SIM-swap%20fraud` opens with that scenario already scored.
+
+## Tools
+
+* `python -m tools.parity` prints the golden scores, the Python aggregates over 10 seeds, a
+  comparison with the reference table, and the JS reference results when
+  `reference/upi_reference_core.js` is present.
+* `node tools/run_reference.js --seeds 1,2,3` runs the JS reference on its own.
+* `python -m tools.bench_latency` measures `/score` latency and throughput plus batch engine
+  time, and writes `results/latency.md` and `results/latency.json`.
+
+## Ownership
+
+| Part | Owner | Status in this repo |
+|---|---|---|
+| `common/config.py`, `configs/default.yaml`, `service/*`, `tools/*`, CI, Docker, packaging, `tests/test_config.py`, `tests/test_api.py`, `tests/test_parity.py` | Person 4 | done |
+| `sim/*` | Person 1 | interim stand-in from the guide spec (marked in file) |
+| `policy/*` | Person 2 | interim stand-in from the guide spec (marked in file) |
+| `baselines/*`, `eval/*` | Person 3 | interim stand-in: `get_baselines`, `evaluate`, `sweep` |
+| `reference/upi_reference_core.js` | shared, read-only | not yet added; the JS parity test skips until it is |
