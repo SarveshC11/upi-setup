@@ -1,0 +1,22 @@
+# Written by policy/calibrate.py. Load with load_config('configs/calibrated.yaml').
+# Thresholds are in base_thresholds; shift stays 0 so the slider still works.
+policy:
+  weights:
+    new_device: 50
+    net_mobile: 6
+    net_public: 0
+    new_payee: 36
+    amt_2_10x: 19
+    amt_over_10x: 55
+    velocity: 24
+    sim_change: 32
+    remote: 70
+    far_location: 34
+    fri_medium: 19
+    fri_high: 8
+    fri_very_high: 24
+  base_thresholds:
+  - 58
+  - 74
+  - 77
+  shift: 0
