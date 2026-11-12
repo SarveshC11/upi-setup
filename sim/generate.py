@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 
 from common.config import ATTACK_TYPES, Config
+from sim.attacks import attack_spec, generate_attack_type, make_frame, _pick, NETWORKS
+from sim.rng import make_rng, make_side_rng
 
 COLUMNS = [
     "kind", "attack_type", "median", "ratio", "amount", "new_device", "network", "new_payee",
@@ -54,7 +56,8 @@ def generate(
     n_users = cfg.sizes.n_users if n_users is None else n_users
     per_user = cfg.sizes.payments_per_user if payments_per_user is None else payments_per_user
     n_att = cfg.sizes.attacks_per_type if attacks_per_type is None else attacks_per_type
-    rng = np.random.default_rng(seed)
+    rng = make_rng(seed)
+    ev = make_side_rng(seed, 1)
 
     # --- genuine payments
     user_median = user_medians(cfg, rng)
@@ -70,52 +73,25 @@ def generate(
     )
     true_sim = rng.random(n) < lp.true_sim_change
     true_remote = rng.random(n) < lp.true_remote
-    legit = dict(
-        kind="legit", attack_type=None, median=median, ratio=ratio,
-        amount=np.round(median * ratio),
-        new_device=rng.random(n) < lp.new_device,
-        network=_network(rng, lp.network, n),
-        new_payee=rng.random(n) < lp.new_payee,
-        velocity=rng.random(n) < lp.velocity,
-        sim_change=true_sim & (rng.random(n) < g.coverage.sim_change),
-        remote=true_remote & (rng.random(n) < g.coverage.remote),
-        far_location=rng.random(n) < lp.far_location,
-        fri=rng.choice(4, size=n, p=lp.fri),
-    )
-    legit["u"] = rng.random(n)  # drawn last
-    legit_df = _frame(**legit)
+    flags = {
+        "new_device": rng.random(n) < lp.new_device,
+        "new_payee": rng.random(n) < lp.new_payee,
+        "velocity": rng.random(n) < lp.velocity,
+        "far_location": rng.random(n) < lp.far_location,
+        "sim_change": true_sim & (rng.random(n) < g.coverage.sim_change),
+        "remote": true_remote & (rng.random(n) < g.coverage.remote),
+    }
+    legit_df = make_frame("legit", None, median, ratio, flags,
+                          _NETS[rng.choice(3, size=n, p=[lp.network.home, lp.network.mobile,
+                                                          lp.network.public])],
+                          _pick(rng, lp.fri, n))
 
     # --- attacks
     parts = []
     for t in ATTACK_TYPES:
-        ap = getattr(g.attacks, t)
-        m = n_att
-        med = user_median[rng.integers(0, n_users, m)]
-        r = np.maximum(
-            g.min_attack_ratio,
-            np.exp(np.log(ap.ratio_center) + ap.ratio_sigma * rng.standard_normal(m)),
-        )
-        cols = dict(
-            kind="attack", attack_type=t, median=med, ratio=r,
-            new_device=rng.random(m) < ap.new_device,
-            network=_network(rng, ap.network, m),
-            new_payee=rng.random(m) < ap.new_payee,
-            velocity=rng.random(m) < ap.velocity,
-            sim_change=(rng.random(m) < ap.true_sim_change)
-            & (rng.random(m) < g.coverage.sim_change),
-            remote=(rng.random(m) < ap.true_remote) & (rng.random(m) < g.coverage.remote),
-            far_location=rng.random(m) < ap.far_location,
-            fri=rng.choice(4, size=m, p=ap.fri),
-        )
-        if g.evasive:
-            ep = g.evasive_params
-            normal = rng.random(m) < ep.normal_amount_prob
-            cols["ratio"] = np.where(normal, 1 + rng.random(m), cols["ratio"])
-            cols["velocity"] = np.zeros(m, dtype=bool)
-            cols["network"] = np.where(cols["network"] == "public", "mobile", cols["network"])
-            cols["fri"] = np.where(rng.random(m) < ep.fri_zero_prob, 0, cols["fri"])
-        cols["amount"] = np.round(med * cols["ratio"])
-        cols["u"] = rng.random(m)  # drawn last
-        parts.append(_frame(**cols))
+        parts.append(generate_attack_type(
+            t, attack_spec(cfg, t), user_median, n_att, rng, ev, g.coverage,
+            g.evasive_params if g.evasive else None))
     attacks_df = pd.concat(parts, ignore_index=True)
+    attacks_df["u"] = rng.random(len(attacks_df))
     return legit_df, attacks_df

@@ -13,14 +13,19 @@ import numpy as np
 import pandas as pd
 
 from common.config import ATTACK_TYPES, TIERS, CostConfig
-from policy.engine import DEFAULT_THRESHOLDS, Policy, make_engine
+from policy.engine import DEFAULT_THRESHOLDS, SIGNAL_GROUPS, Policy, make_engine
 
 
 def evaluate(policy: Policy, legit: pd.DataFrame, attacks: pd.DataFrame,
              assume: CostConfig) -> dict:
-    friction = assume.friction.as_dict()
-    abandon = assume.abandon.as_dict()
-    p_stop = assume.p_stop.as_dict()
+    if isinstance(assume, Mapping):
+        friction = assume["friction"]
+        abandon = assume["abandon"]
+        p_stop = assume["p_stop"]
+    else:
+        friction = assume.friction.as_dict()
+        abandon = assume.abandon.as_dict()
+        p_stop = assume.p_stop.as_dict()
 
     tier_idx = {t: i for i, t in enumerate(TIERS)}
     type_idx = {t: i for i, t in enumerate(ATTACK_TYPES)}
@@ -44,7 +49,7 @@ def evaluate(policy: Policy, legit: pd.DataFrame, attacks: pd.DataFrame,
     total = amt.sum()
     prevented = amt[stopped].sum()
 
-    return {
+    result = {
         "friction": float(fr.sum() * per_k),
         "extra": float((lt != "0").sum() * per_k),
         "abandoned": float((legit["u"].to_numpy() < ab).sum() * per_k),
@@ -57,6 +62,17 @@ def evaluate(policy: Policy, legit: pd.DataFrame, attacks: pd.DataFrame,
             for t in ATTACK_TYPES
         },
     }
+    result["total"] = float(total)
+    result["prevented"] = float(100.0 * prevented / total) if total else 0.0
+    result["per_type"] = {
+        t: {
+            "n": int((types == t).sum()),
+            "stopped": int(stopped[types == t].sum()),
+            "share": result["per_type_stopped"][t],
+        }
+        for t in ATTACK_TYPES
+    }
+    return result
 
 
 def sweep(weights: Mapping[str, int], legit: pd.DataFrame, attacks: pd.DataFrame,
@@ -67,3 +83,49 @@ def sweep(weights: Mapping[str, int], legit: pd.DataFrame, attacks: pd.DataFrame
         m = evaluate(make_engine(weights, d, thresholds), legit, attacks, assume)
         out.append({"shift": int(d), **m})
     return out
+
+
+def scale_costs(assume, friction: float = 1.0, stop: float = 1.0) -> dict:
+    if isinstance(assume, Mapping):
+        source = assume
+    else:
+        source = {
+            "friction": assume.friction.as_dict(),
+            "abandon": assume.abandon.as_dict(),
+            "p_stop": assume.p_stop.as_dict(),
+        }
+    return {
+        "friction": {t: v * friction for t, v in source["friction"].items()},
+        "abandon": {t: min(1.0, v * friction) for t, v in source["abandon"].items()},
+        "p_stop": {
+            t: {a: min(1.0, p * stop) for a, p in row.items()}
+            for t, row in source["p_stop"].items()
+        },
+    }
+
+
+def ablation(weights, shift, legit, attacks, assume) -> list[dict]:
+    base = evaluate(make_engine(weights, shift), legit, attacks, assume)
+    rows = []
+    for group, keys in SIGNAL_GROUPS.items():
+        reduced = dict(weights)
+        for key in keys:
+            reduced[key] = 0
+        result = evaluate(make_engine(reduced, shift), legit, attacks, assume)
+        rows.append({
+            "group": group,
+            "prevented": result["prevented"],
+            "friction": result["friction"],
+            "d_prevented": result["prevented"] - base["prevented"],
+            "d_friction": result["friction"] - base["friction"],
+        })
+    return rows
+
+
+def best_prevented_within(curve: list[dict], budget: float) -> float:
+    values = [row["prevented"] for row in curve if row["friction"] <= budget + 1e-9]
+    return max(values) if values else 0.0
+
+
+def scalar_metrics(metrics: dict) -> dict:
+    return {key: value for key, value in metrics.items() if key != "per_type"}

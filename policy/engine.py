@@ -47,7 +47,10 @@ def _active_signals(tx: Mapping, bands: Sequence[float]) -> list[str]:
         on.append("net_public")
     if tx.get("new_payee"):
         on.append("new_payee")
-    ratio = float(tx["ratio"])
+    ratio_value = tx.get("ratio")
+    if ratio_value is None:
+        ratio_value = tx["amount"] / max(1, tx["median"])
+    ratio = float(ratio_value)
     if lo <= ratio <= hi:
         on.append("amt_2x_10x")
     elif ratio > hi:
@@ -125,6 +128,9 @@ def make_engine(
         return pd.Series(codes[np.searchsorted(edges, s, side="right")], index=df.index)
 
     return policy
+
+
+score_df = score_frame
 
 
 def tier_from_score(

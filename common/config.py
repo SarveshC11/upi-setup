@@ -19,6 +19,7 @@ import json
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -43,6 +44,12 @@ class ConfigError(ValueError):
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    def __getitem__(self, key: str) -> Any:
+        """Support the mapping-style access used by the original module API."""
+        if key == "weights" and hasattr(self, "weights"):
+            return self.weights.model_dump()
+        return getattr(self, key)
 
 
 Prob = Field(ge=0.0, le=1.0)
@@ -120,6 +127,22 @@ class AttackParams(_Strict):
 
     check_fri = field_validator("fri")(_fri_dist)
 
+    @property
+    def median_multiple(self) -> float:
+        return self.ratio_center
+
+    @property
+    def sigma(self) -> float:
+        return self.ratio_sigma
+
+    @property
+    def sim_change(self) -> float:
+        return self.true_sim_change
+
+    @property
+    def remote(self) -> float:
+        return self.true_remote
+
 
 class AttackTable(_Strict):
     simswap: AttackParams
@@ -132,6 +155,10 @@ class AttackTable(_Strict):
 class Coverage(_Strict):
     sim_change: float = Prob
     remote: float = Prob
+
+    @property
+    def sim_feed(self) -> float:
+        return self.sim_change
 
 
 class EvasiveParams(_Strict):
@@ -178,6 +205,7 @@ class Weights(_Strict):
     fri_3: int = Field(ge=0, le=100)
 
 
+
 def check_thresholds(v: list[int]) -> list[int]:
     if len(v) != 3:
         raise ValueError("thresholds must list exactly 3 values")
@@ -194,6 +222,10 @@ class PolicyConfig(_Strict):
     shift: int = Field(ge=-100, le=100)
 
     check_thr = field_validator("thresholds")(check_thresholds)
+
+    @property
+    def base_thresholds(self) -> list[int]:
+        return self.thresholds
 
 
 # ----------------------------------------------------------------- costs
@@ -241,11 +273,22 @@ class CostConfig(_Strict):
                 raise ValueError(f"abandon[{tier}] must be a probability, got {p}")
         return self
 
+    def keys(self):
+        return ("friction", "abandon", "p_stop")
+
+    def __getitem__(self, key: str):
+        value = getattr(self, key)
+        return value.as_dict() if hasattr(value, "as_dict") else value
+
 
 class BaselineConfig(_Strict):
     amount_rule_threshold: float = Field(ge=0)
     fri_block_level: int = Field(ge=0, le=3)
     fri_warn_level: int = Field(ge=0, le=3)
+
+    @property
+    def ml_enabled(self) -> bool:
+        return True
 
 
 class SweepRange(_Strict):
@@ -260,6 +303,14 @@ class SweepRange(_Strict):
 class ExperimentConfig(_Strict):
     sweep_shifts: SweepRange
     sensitivity_factors: list[float]
+
+    @property
+    def shifts(self) -> SweepRange:
+        return self.sweep_shifts
+
+    @property
+    def sensitivity_scales(self) -> list[float]:
+        return self.sensitivity_factors
 
 
 # ----------------------------------------------------------------- service
@@ -330,6 +381,26 @@ class Config(_Strict):
         blob = json.dumps(self.to_dict(), sort_keys=True).encode()
         return hashlib.sha256(blob).hexdigest()[:12]
 
+    @property
+    def attacks(self) -> AttackTable:
+        """Compatibility alias for the original top-level simulator config."""
+        return self.generator.attacks
+
+    @property
+    def attacker(self) -> SimpleNamespace:
+        """Default learned-attacker settings for the simulator compatibility API."""
+        return SimpleNamespace(
+            tries=120,
+            random_frac=0.4,
+            optimizer="cma",
+            train_seeds=list(self.seeds.tune),
+            test_seeds=list(self.seeds.report),
+            shifts=SimpleNamespace(start=-30, stop=60, step=6),
+            held_out="collect",
+            rng_seed=0,
+            max_amount=self.service.max_amount,
+        )
+
 
 # ----------------------------------------------------------------- loading
 
@@ -382,7 +453,10 @@ def _read_yaml(path: Path, _seen: tuple[Path, ...] = ()) -> dict:
     data = _stringify_keys(data)
     parent = data.pop("extends", None)
     if parent is not None:
-        base = _read_yaml(path.parent / str(parent), (*_seen, path))
+        parent_path = path.parent / str(parent)
+        if not parent_path.is_file() and Path(parent).name == DEFAULT_PATH.name:
+            parent_path = DEFAULT_PATH
+        base = _read_yaml(parent_path, (*_seen, path))
         data = _deep_merge(base, data)
     return data
 
@@ -428,4 +502,32 @@ def load_config(
 
 def with_overrides(cfg: Config, overrides: Mapping[str, Any]) -> Config:
     """Compatibility wrapper for callers using the original functional API."""
+    overrides = copy.deepcopy(dict(overrides))
+    sizes = overrides.get("sizes")
+    if isinstance(sizes, Mapping):
+        sizes = dict(sizes)
+        if "users" in sizes and "n_users" not in sizes:
+            sizes["n_users"] = sizes.pop("users")
+        if "legit_per_user" in sizes and "payments_per_user" not in sizes:
+            sizes["payments_per_user"] = sizes.pop("legit_per_user")
+        overrides["sizes"] = sizes
+    if "attacks" in overrides:
+        attacks = {}
+        for name, values in dict(overrides.pop("attacks")).items():
+            values = dict(values)
+            if "sim_change" in values and "true_sim_change" not in values:
+                values["true_sim_change"] = values.pop("sim_change")
+            if "remote" in values and "true_remote" not in values:
+                values["true_remote"] = values.pop("remote")
+            attacks[name] = values
+        overrides.setdefault("generator", {})["attacks"] = attacks
+    generator = overrides.get("generator")
+    if isinstance(generator, Mapping):
+        generator = dict(generator)
+        coverage = generator.get("coverage")
+        if isinstance(coverage, Mapping) and "sim_feed" in coverage:
+            coverage = dict(coverage)
+            coverage["sim_change"] = coverage.pop("sim_feed")
+            generator["coverage"] = coverage
+        overrides["generator"] = generator
     return cfg.with_overrides(overrides)

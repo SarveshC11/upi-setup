@@ -24,21 +24,31 @@ COLUMNS = [
 def immutable_signals(cfg, attack_type: str) -> list[str]:
     """Signals this attack needs and cannot hide (simswap: sim_change, screenshare: remote,
     collect and stolen: new_payee). The learned attacker must leave these at their base value."""
-    return list(cfg.attacks[attack_type].get("immutable", []))
+    defaults = {
+        "simswap": ["sim_change"],
+        "screenshare": ["remote"],
+        "collect": ["new_payee"],
+        "replay": [],
+        "stolen": ["new_payee"],
+    }
+    attacks = getattr(getattr(cfg, "generator", cfg), "attacks")
+    attack = attacks[attack_type]
+    return list(getattr(attack, "immutable", defaults[attack_type]))
 
 
 def attack_spec(cfg, attack_type: str) -> dict:
     """The hand-written parameters of one attack type, as a plain dict."""
-    A = cfg.attacks[attack_type]
+    attacks = getattr(getattr(cfg, "generator", cfg), "attacks")
+    A = attacks[attack_type]
     return {
         "new_device": float(A.new_device),
         "network": {k: float(A.network[k]) for k in NETWORKS},
         "new_payee": float(A.new_payee),
-        "median_multiple": float(A.median_multiple),
-        "sigma": float(A.sigma),
+        "median_multiple": float(getattr(A, "median_multiple", A.ratio_center)),
+        "sigma": float(getattr(A, "sigma", A.ratio_sigma)),
         "velocity": float(A.velocity),
-        "sim_change": float(A.sim_change),
-        "remote": float(A.remote),
+        "sim_change": float(getattr(A, "sim_change", A.true_sim_change)),
+        "remote": float(getattr(A, "remote", A.true_remote)),
         "far_location": float(A.far_location),
         "fri": [float(x) for x in A.fri],
         # chance the attacker routes the money to a clean payee number (fri forced to 0).
@@ -93,7 +103,9 @@ def generate_attack_type(attack_type, spec, user_medians, n, rng, ev, coverage,
     look_normal_u, look_ratio_u, fri_u = ev.random(n), ev.random(n), ev.random(n)
     fri_zero_p = spec.get("fri_evasion", 0.0)
     if evasive_params is not None:
-        r = np.where(look_normal_u < evasive_params.look_normal_prob, 1.0 + look_ratio_u, r)
+        normal_prob = getattr(evasive_params, "look_normal_prob",
+                              evasive_params.normal_amount_prob)
+        r = np.where(look_normal_u < normal_prob, 1.0 + look_ratio_u, r)
         velocity = np.zeros(n, dtype=bool)
         net_idx = np.where(net_idx == 2, 1, net_idx)
         fri_zero_p = max(fri_zero_p, evasive_params.fri_zero_prob)
@@ -104,7 +116,8 @@ def generate_attack_type(attack_type, spec, user_medians, n, rng, ev, coverage,
         "new_payee": rng.random(n) < spec["new_payee"],
         "velocity": velocity,
         "far_location": rng.random(n) < spec["far_location"],
-        "sim_change": (rng.random(n) < spec["sim_change"]) & (rng.random(n) < coverage.sim_feed),
+        "sim_change": (rng.random(n) < spec["sim_change"])
+        & (rng.random(n) < getattr(coverage, "sim_feed", coverage.sim_change)),
         "remote": (rng.random(n) < spec["remote"]) & (rng.random(n) < coverage.remote),
     }
     return make_frame("attack", attack_type, m, r, flags, np.array(NETWORKS)[net_idx], fri)
